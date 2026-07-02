@@ -13,7 +13,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[ALLOWED_ORIGIN],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -31,7 +31,7 @@ async def add_headers(request: Request, call_next):
 
 @app.get("/stats")
 async def stats(values: str = Query(...)):
-    nums = [int(x) for x in values.split(",")]
+    nums = [int(x.strip()) for x in values.split(",")]
 
     return {
         "email": EMAIL,
