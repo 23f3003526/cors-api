@@ -184,7 +184,7 @@ async def answer_image(
 ):
     try:
         # Read the Gemini API key from Render.
-        api_key = os.getenv("AQ.Ab8RN6JME4KslbyGENlzmEHrgPU9yKe0cnV073culXB4vzDnGg")
+        api_key = os.getenv("Gemini_API_Key")
 
         if not api_key:
             return JSONResponse(
