@@ -87,3 +87,77 @@ async def verify(req: TokenRequest):
             "message": str(e),
         },
      )  
+    
+import os
+import yaml
+from dotenv import load_dotenv
+from fastapi import Query
+
+load_dotenv()
+
+
+def to_bool(v):
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("true", "1", "yes", "on")
+
+
+@app.get("/effective-config")
+async def effective_config(set: list[str] = Query(default=[])):
+    # defaults
+    cfg = {
+        "port": 8000,
+        "workers": 1,
+        "debug": False,
+        "log_level": "info",
+        "api_key": "default-secret-000",
+    }
+
+    # yaml
+    if os.path.exists("config.development.yaml"):
+        with open("config.development.yaml") as f:
+            cfg.update(yaml.safe_load(f))
+
+    # .env
+    if os.getenv("APP_PORT"):
+        cfg["port"] = os.getenv("APP_PORT")
+
+    if os.getenv("NUM_WORKERS"):
+        cfg["workers"] = os.getenv("NUM_WORKERS")
+
+    if os.getenv("APP_API_KEY"):
+        cfg["api_key"] = os.getenv("APP_API_KEY")
+
+    # OS env (higher precedence)
+    if os.getenv("APP_PORT"):
+        cfg["port"] = os.getenv("APP_PORT")
+
+    if os.getenv("APP_WORKERS"):
+        cfg["workers"] = os.getenv("APP_WORKERS")
+
+    if os.getenv("APP_DEBUG"):
+        cfg["debug"] = os.getenv("APP_DEBUG")
+
+    if os.getenv("APP_LOG_LEVEL"):
+        cfg["log_level"] = os.getenv("APP_LOG_LEVEL")
+
+    if os.getenv("APP_API_KEY"):
+        cfg["api_key"] = os.getenv("APP_API_KEY")
+
+    # CLI overrides
+    for item in set:
+        if "=" not in item:
+            continue
+        k, v = item.split("=", 1)
+        cfg[k] = v
+
+    # Type coercion
+    cfg["port"] = int(cfg["port"])
+    cfg["workers"] = int(cfg["workers"])
+    cfg["debug"] = to_bool(cfg["debug"])
+    cfg["log_level"] = str(cfg["log_level"])
+
+    # Secret masking
+    cfg["api_key"] = "****"
+
+    return cfg    
