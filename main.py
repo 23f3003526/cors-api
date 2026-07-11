@@ -1,51 +1,124 @@
 from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import uuid
-import time
 from pydantic import BaseModel
-from fastapi.responses import JSONResponse
-import jwt
 
-EMAIL = "23f3003526@ds.study.iitm.ac.in"
-ALLOWED_ORIGIN = "https://dash-e51i9s.example.com"
+import base64
+import io
+import os
+import time
+import uuid
+
+import jwt
+from PIL import Image
+from google import genai
+
+
+# =========================================================
+# APP SETUP
+# =========================================================
 
 app = FastAPI()
 
+
+# =========================================================
+# CORS
+# =========================================================
+
+# Allows the image grader and other browser clients
+# to send cross-origin requests.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ALLOWED_ORIGIN],
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# =========================================================
+# RESPONSE HEADERS
+# =========================================================
+
 @app.middleware("http")
 async def add_headers(request: Request, call_next):
-    start = time.perf_counter()
+    start_time = time.perf_counter()
 
     response = await call_next(request)
 
+    process_time = time.perf_counter() - start_time
+
     response.headers["X-Request-ID"] = str(uuid.uuid4())
-    response.headers["X-Process-Time"] = f"{time.perf_counter()-start:.6f}"
+    response.headers["X-Process-Time"] = f"{process_time:.6f}"
 
     return response
 
 
+# =========================================================
+# HOME ENDPOINT
+# =========================================================
+
+@app.get("/")
+async def home():
+    return {
+        "status": "running",
+        "available_endpoints": [
+            "GET /stats",
+            "POST /verify",
+            "POST /answer-image",
+        ],
+    }
+
+
+# =========================================================
+# STATS API
+# =========================================================
+
+EMAIL = "23f3003526@ds.study.iitm.ac.in"
+
+
 @app.get("/stats")
 async def stats(values: str = Query(...)):
-    nums = [int(x.strip()) for x in values.split(",")]
+    try:
+        nums = [
+            int(value.strip())
+            for value in values.split(",")
+        ]
 
-    return {
-        "email": EMAIL,
-        "count": len(nums),
-        "sum": sum(nums),
-        "min": min(nums),
-        "max": max(nums),
-        "mean": sum(nums) / len(nums)
-    }
+        if not nums:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "At least one number is required"
+                },
+            )
+
+        return {
+            "email": EMAIL,
+            "count": len(nums),
+            "sum": sum(nums),
+            "min": min(nums),
+            "max": max(nums),
+            "mean": sum(nums) / len(nums),
+        }
+
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "All values must be integers"
+            },
+        )
+
+
+# =========================================================
+# JWT VERIFICATION API
+# =========================================================
+
 ISSUER = "https://idp.exam.local"
+
 AUDIENCE = "tds-ww7kmemd.apps.exam.local"
+
 
 PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2okOHspNjgA+2rTLbeuY
@@ -57,18 +130,27 @@ SI6iyrYbKR0NEBSqq4XkadEjsCs4LlgniT7GlkL9Mce3b0wGLs9/7ZIX
 dQIDAQAB
 -----END PUBLIC KEY-----"""
 
+
 class TokenRequest(BaseModel):
     token: str
+
 
 @app.post("/verify")
 async def verify(req: TokenRequest):
     try:
         payload = jwt.decode(
             req.token,
-            PUBLIC_KEY,
+            key=PUBLIC_KEY,
             algorithms=["RS256"],
             issuer=ISSUER,
             audience=AUDIENCE,
+            options={
+                "require": [
+                    "exp",
+                    "iss",
+                    "aud",
+                ]
+            },
         )
 
         return {
@@ -78,86 +160,105 @@ async def verify(req: TokenRequest):
             "aud": payload.get("aud"),
         }
 
-    except Exception as e:
-     return JSONResponse(
-        status_code=401,
-        content={
-            "valid": False,
-            "error": type(e).__name__,
-            "message": str(e),
-        },
-     )  
-    
-import os
-import yaml
-from dotenv import load_dotenv
-from fastapi import Query
-
-load_dotenv()
+    except jwt.PyJWTError:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "valid": False
+            },
+        )
 
 
-def to_bool(v):
-    if isinstance(v, bool):
-        return v
-    return str(v).lower() in ("true", "1", "yes", "on")
+# =========================================================
+# MULTIMODAL IMAGE QUESTION-ANSWERING API
+# =========================================================
+
+class ImageQuestionRequest(BaseModel):
+    image_base64: str
+    question: str
 
 
-@app.get("/effective-config")
-async def effective_config(set: list[str] = Query(default=[])):
-    # defaults
-    cfg = {
-        "port": 8000,
-        "workers": 1,
-        "debug": False,
-        "log_level": "info",
-        "api_key": "default-secret-000",
-    }
+@app.post("/answer-image")
+async def answer_image(
+    req: ImageQuestionRequest
+):
+    try:
+        # Read the Gemini API key from Render.
+        api_key = os.getenv("GEMINI_API_KEY")
 
-    # yaml
-    if os.path.exists("config.development.yaml"):
-        with open("config.development.yaml") as f:
-            cfg.update(yaml.safe_load(f))
+        if not api_key:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": (
+                        "GEMINI_API_KEY is not configured"
+                    )
+                },
+            )
 
-    # .env
-    if os.getenv("APP_PORT"):
-        cfg["port"] = os.getenv("APP_PORT")
+        client = genai.Client(
+            api_key=api_key
+        )
 
-    if os.getenv("NUM_WORKERS"):
-        cfg["workers"] = os.getenv("NUM_WORKERS")
+        image_data = req.image_base64.strip()
 
-    if os.getenv("APP_API_KEY"):
-        cfg["api_key"] = os.getenv("APP_API_KEY")
+        # Supports data URLs such as:
+        # data:image/png;base64,iVBORw0KGgo...
+        if image_data.startswith("data:"):
+            image_data = image_data.split(
+                ",",
+                1,
+            )[1]
 
-    # OS env (higher precedence)
-    if os.getenv("APP_PORT"):
-        cfg["port"] = os.getenv("APP_PORT")
+        # Decode the base64 image.
+        image_bytes = base64.b64decode(
+            image_data
+        )
 
-    if os.getenv("APP_WORKERS"):
-        cfg["workers"] = os.getenv("APP_WORKERS")
+        # Convert the decoded bytes into an image.
+        image = Image.open(
+            io.BytesIO(image_bytes)
+        ).convert("RGB")
 
-    if os.getenv("APP_DEBUG"):
-        cfg["debug"] = os.getenv("APP_DEBUG")
+        prompt = f"""
+Analyze the supplied image carefully.
 
-    if os.getenv("APP_LOG_LEVEL"):
-        cfg["log_level"] = os.getenv("APP_LOG_LEVEL")
+Question:
+{req.question}
 
-    if os.getenv("APP_API_KEY"):
-        cfg["api_key"] = os.getenv("APP_API_KEY")
+Return only the final answer.
 
-    # CLI overrides
-    for item in set:
-        if "=" not in item:
-            continue
-        k, v = item.split("=", 1)
-        cfg[k] = v
+Rules:
+- Do not provide an explanation.
+- Do not include labels or introductory text.
+- If the answer is numeric, return only the number.
+- Do not include currency symbols.
+- Do not include commas in numeric answers.
+- Do not include measurement units.
+- Perform any required arithmetic carefully.
+- The response must be concise.
+"""
 
-    # Type coercion
-    cfg["port"] = int(cfg["port"])
-    cfg["workers"] = int(cfg["workers"])
-    cfg["debug"] = to_bool(cfg["debug"])
-    cfg["log_level"] = str(cfg["log_level"])
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                prompt,
+                image,
+            ],
+        )
 
-    # Secret masking
-    cfg["api_key"] = "****"
+        answer = (
+            response.text or ""
+        ).strip()
 
-    return cfg    
+        return {
+            "answer": str(answer)
+        }
+
+    except Exception as error:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": str(error)
+            },
+        )

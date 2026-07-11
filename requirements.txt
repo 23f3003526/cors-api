@@ -2,7 +2,5 @@ fastapi
 uvicorn[standard]
 PyJWT[crypto]
 cryptography
-PyYAML
-python-dotenv
 google-genai
 Pillow
