@@ -10,6 +10,8 @@ import time
 import traceback
 import uuid
 
+from dotenv import load_dotenv
+
 import jwt
 from PIL import Image
 from google import genai
@@ -19,6 +21,7 @@ from google import genai
 # FASTAPI APP
 # =========================================================
 
+load_dotenv()
 app = FastAPI()
 
 
@@ -78,6 +81,11 @@ async def home():
             "POST /answer-image",
         ],
     }
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 # =========================================================
@@ -212,91 +220,45 @@ async def answer_image(
     req: ImageQuestionRequest
 ):
     try:
-<<<<<<< HEAD
-
-        # IMPORTANT:
-        # This must match the environment-variable
-        # name shown in your Render screenshot.
-        api_key = os.getenv(
-            "Gemini_API_Key"
+        api_key = (
+            os.getenv("Gemini_API_Key")
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
         )
 
-        # Print only whether the key exists.
-        # Never print the actual API key.
         print(
             "Gemini key found:",
             bool(api_key),
             flush=True,
         )
-=======
-        # Read the Gemini API key from Render.
-        api_key = os.getenv("Gemini_API_Key")
->>>>>>> a11baa5a1e2c243c18a82218f2d4a8cb814f1401
 
         if not api_key:
-
             print(
-                "ERROR: Render environment "
-                "variable Gemini_API_Key "
-                "was not found.",
+                "ERROR: No Gemini API key was found in the environment.",
                 flush=True,
             )
-
             return JSONResponse(
                 status_code=500,
                 content={
-                    "error": (
-                        "Gemini API key "
-                        "is not configured"
-                    )
+                    "error": "Gemini API key is not configured"
                 },
             )
 
-        # Create Gemini client.
-        client = genai.Client(
-            api_key=api_key
-        )
+        client = genai.Client(api_key=api_key)
 
-        # Get base64 text.
-        image_data = (
-            req.image_base64.strip()
-        )
+        image_data = req.image_base64.strip()
 
-        # Support data URLs such as:
-        #
-        # data:image/png;base64,
-        # iVBORw0KGgo...
-        if image_data.startswith(
-            "data:"
-        ):
-            image_data = (
-                image_data.split(
-                    ",",
-                    1,
-                )[1]
-            )
+        if image_data.startswith("data:"):
+            image_data = image_data.split(",", 1)[1]
 
-        # Remove spaces and line breaks
-        # that may occur in base64 strings.
-        image_data = "".join(
-            image_data.split()
-        )
+        image_data = "".join(image_data.split())
 
-        # Convert base64 text into bytes.
-        image_bytes = (
-            base64.b64decode(
-                image_data
-            )
-        )
+        try:
+            image_bytes = base64.b64decode(image_data, validate=True)
+        except Exception as exc:
+            raise ValueError("Invalid base64 image data") from exc
 
-        # Open and validate the image.
-        image = Image.open(
-            io.BytesIO(
-                image_bytes
-            )
-        )
-
-        # Convert all image types to RGB.
+        image = Image.open(io.BytesIO(image_bytes))
         image = image.convert("RGB")
 
         prompt = f"""
@@ -311,75 +273,36 @@ Output requirements:
 1. Return only the final answer.
 2. Do not provide an explanation.
 3. Do not add a label or introduction.
-4. If the answer is numeric, return only
-   the number.
+4. If the answer is numeric, return only the number.
 5. Do not include currency symbols.
 6. Do not include units.
 7. Do not include commas in numbers.
-8. Perform any required calculations
-   carefully.
+8. Perform any required calculations carefully.
 9. The answer must be concise.
 """
 
-        # Send both the question
-        # and image to Gemini.
-        response = (
-            client.models.generate_content(
-                model=(
-                    "gemini-2.5-flash"
-                ),
-                contents=[
-                    prompt,
-                    image,
-                ],
-            )
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt, image],
         )
 
-        answer = (
-            response.text or ""
-        ).strip()
+        answer = (response.text or "").strip()
 
         if not answer:
-
-            print(
-                "ERROR: Gemini returned "
-                "an empty answer.",
-                flush=True,
-            )
-
+            print("ERROR: Gemini returned an empty answer.", flush=True)
             return JSONResponse(
                 status_code=500,
-                content={
-                    "error": (
-                        "The model returned "
-                        "an empty answer"
-                    )
-                },
+                content={"error": "The model returned an empty answer"},
             )
 
-        # Required response format:
-        #
-        # {"answer": "4089.35"}
-        return {
-            "answer": str(answer)
-        }
+        return {"answer": str(answer)}
 
     except Exception as error:
-
         print(
             "ANSWER-IMAGE ERROR:",
             type(error).__name__,
             str(error),
             flush=True,
         )
-
-        # Print the complete error
-        # in Render logs.
         traceback.print_exc()
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": str(error)
-            },
-        )
+        return JSONResponse(status_code=500, content={"error": str(error)})
