@@ -240,7 +240,7 @@ async def answer_image(
             return JSONResponse(
                 status_code=500,
                 content={
-                    "error": "Gemini API key is not configured"
+                    "error": "Gemini API key is not configured. Add Gemini_API_Key to the deployment environment."
                 },
             )
 
