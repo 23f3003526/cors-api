@@ -212,6 +212,7 @@ async def answer_image(
     req: ImageQuestionRequest
 ):
     try:
+<<<<<<< HEAD
 
         # IMPORTANT:
         # This must match the environment-variable
@@ -227,6 +228,10 @@ async def answer_image(
             bool(api_key),
             flush=True,
         )
+=======
+        # Read the Gemini API key from Render.
+        api_key = os.getenv("Gemini_API_Key")
+>>>>>>> a11baa5a1e2c243c18a82218f2d4a8cb814f1401
 
         if not api_key:
 
