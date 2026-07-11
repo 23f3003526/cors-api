@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import jwt
 from PIL import Image
 from google import genai
+from google.genai import types as genai_types
 
 
 # =========================================================
@@ -259,7 +260,24 @@ async def answer_image(
             raise ValueError("Invalid base64 image data") from exc
 
         image = Image.open(io.BytesIO(image_bytes))
-        image = image.convert("RGB")
+        source_format = (image.format or "PNG").upper()
+        if source_format == "JPG":
+            source_format = "JPEG"
+
+        mime_type = {
+            "PNG": "image/png",
+            "JPEG": "image/jpeg",
+            "WEBP": "image/webp",
+            "GIF": "image/gif",
+            "BMP": "image/bmp",
+        }.get(source_format, "image/png")
+
+        image_bytes_for_model = io.BytesIO()
+        image.save(image_bytes_for_model, format=source_format)
+        image_part = genai_types.Part.from_bytes(
+            data=image_bytes_for_model.getvalue(),
+            mime_type=mime_type,
+        )
 
         prompt = f"""
 Carefully inspect the supplied image.
@@ -283,7 +301,7 @@ Output requirements:
 
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=[prompt, image],
+            contents=[prompt, image_part],
         )
 
         answer = (response.text or "").strip()
